@@ -44,6 +44,7 @@
     "@brightspace-ui-labs/pagination": "^1",
     "@brightspace-ui-labs/video-producer": "^0",
     "@chaitin/querystring": "^1.1.0",
+    "@createjs/easeljs": "^2.0.0-beta.4",
     "@polymer/polymer": "^3.4.1",
     "d2l-alert": "BrightspaceUI/alert#semver:^4",
     "d2l-dropdown": "BrightspaceUI/dropdown#semver:^7",

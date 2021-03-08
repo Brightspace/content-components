@@ -89,15 +89,6 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		this._videoLoaded = false;
 	}
 
-	get _loading() {
-		return !(
-			this.metadata
-			&& this._videoLoaded
-			&& this.selectedLanguage
-			&& this.selectedLanguage.code
-		);
-	}
-
 	firstUpdated() {
 		super.firstUpdated();
 		this._video = this.shadowRoot.querySelector('d2l-labs-media-player');
@@ -118,11 +109,141 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		});
 	}
 
+	render() {
+		return html`
+			<div class="d2l-video-producer">
+				<div class="d2l-video-producer-video-controls">
+					<d2l-labs-media-player
+						@pause="${this._pauseUpdatingVideoTime}"
+						@play="${this._startUpdatingVideoTime}"
+						@seeking="${this._updateVideoTime}"
+						controls
+						src="${this.src}"
+					></d2l-labs-media-player>
+					<d2l-labs-video-producer-chapters
+						.chapters="${this.metadata && this.metadata.chapters}"
+						.defaultLanguage="${this.defaultLanguage}"
+						.selectedLanguage="${this.selectedLanguage}"
+						?loading="${this._loading}"
+						@add-new-chapter="${this._addNewChapter}"
+						@chapters-changed="${this._handleChaptersChanged}"
+						@set-chapter-to-current-time="${this._setChapterToCurrentTime}"
+					></d2l-labs-video-producer-chapters>
+				</div>
+				<div class="d2l-video-producer-timeline">
+					<canvas width="985" height="90" id="timeline-canvas"></canvas>
+					<div class="d2l-video-producer-timeline-controls">
+						<d2l-button-icon @click="${this._changeToSeekMode}" text="${this.localize(constants.CONTROL_MODES.SEEK)}" icon="tier1:divider-solid"></d2l-button-icon>
+						<d2l-button-icon @click="${this._changeToMarkMode}" text="${this.localize(constants.CONTROL_MODES.MARK)}" icon="tier1:edit"></d2l-button-icon>
+						<d2l-button-icon @click="${this._changeToCutMode}" text="${this.localize(constants.CONTROL_MODES.CUT)}" icon="html-editor:cut"></d2l-button-icon>
+					</div>
+				</div>
+			</div>
+		`;
+	}
+
 	updated(changedProperties) {
 		super.updated(changedProperties);
 		if (changedProperties.has('metadata') && this.metadata && this._videoLoaded) {
 			this._addCutsToTimeline(this.metadata.cuts);
 		}
+	}
+
+	_addCutsToTimeline(cuts) {
+		const clearCuts = () => {
+			Object.values(this._cuts).forEach(cut => {
+				this._stage.removeChild(cut.displayObject);
+			});
+			this._cuts = {};
+		};
+
+		clearCuts();
+
+		const addCut = (cut) => {
+			// Don't add mark if cut starts at 0 seconds
+			if (cut.in > 0) this._addMarkAtTime(cut.in);
+
+			// Don't add mark if cut goes to the end of the video
+			// NOTE: 0 value means cut goes to end of video.
+			if (cut.out > 0 && cut.out <= Math.floor(this._video.duration)) {
+				this._addMarkAtTime(cut.out);
+			}
+
+			this._setCutBoundsForStageX(this._getStageXFromTime(cut.in) + 1); // Trigger a cut just to the right of the lower mark
+			this._cut();
+		};
+
+		cuts.forEach(cut => {
+			addCut(cut);
+		});
+
+		if (this._currentMark) {
+			this._setMarkStyleNormal(this._currentMark.displayObject);
+			this._currentMark = null;
+		}
+
+		this._stage.update();
+	}
+
+	_addMarkAtTime(time) {
+		const markX = this._getStageXFromTime(time) + constants.CURSOR_OFFSET_X;
+		const bound = Math.round(markX);
+
+		// Don't add a mark if one already exists here (e.g. cut from 0-1, cut from 1-2)
+		if (!this._marks[bound]) {
+			const mark = new Shape();
+			mark.setTransform(markX, constants.CURSOR_OFFSET_Y);
+			mark.graphics.beginFill('#797979').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
+
+			const hitBox = new Shape();
+			hitBox.graphics.beginFill('#FFF').drawRect(constants.HITBOX_OFFSET, constants.HITBOX_OFFSET, constants.HITBOX_WIDTH, constants.HITBOX_HEIGHT);
+			mark.hitArea = hitBox;
+			this._stage.addChild(mark);
+
+			this._marks[bound] = {
+				time: time,
+				bound: bound,
+				displayObject: mark
+			};
+		}
+
+		if (this._currentMark) {
+			this._setMarkStyleNormal(this._currentMark.displayObject);
+		}
+
+		this._currentMark = this._marks[bound];
+		return this._currentMark;
+	}
+
+	//#region Chapter management
+	_addNewChapter() {
+		this._chapters.addNewChapter(this._video.currentTime);
+	}
+
+	_addOrDeleteMarkForEvent(event) {
+		if (this._draggingMark) return;
+		if (this._checkForMarkDelete(event)) return;
+		const mark = this._addMarkAtTime(this._cursor.time);
+		const cut = this._isTimeInCut(this._marks[mark.bound].time * 1000);
+		if (cut) {
+			this._stage.removeChild(cut.displayObject);
+			delete this._cuts[cut.x];
+
+			this._setCutBoundsForStageX(cut.displayObject.x + 1);
+			const cuts = this._getCuts();
+			cuts.forEach(c => {
+				// Since the mark will shorten the length of the cut, find the cut with in ===
+				// the lower cut bound, and update its out time
+				if (c.in === (this._lowerMark ? this._lowerMark.time : 0)) {
+					c.out = (this._upperMark ? this._upperMark.time : 0);
+				}
+			});
+			this._fireMetadataChangedEvent({ cuts });
+		}
+
+		this._hideCursor();
+		this._showAndMoveTimeContainer(mark.time);
+		this._stage.update();
 	}
 
 	//#region Control mode management
@@ -154,6 +275,25 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		this._hideCursor();
 	}
 
+	//#endregion
+	_checkForMarkDelete(event) {
+		if (this._mouseDownStageX && Math.abs(this._mouseDownStageX - event.stageX) === 0) {
+			const markToDelete = this._marks[Math.round(this._currentMark.displayObject.x)];
+			this._stage.removeChild(markToDelete.displayObject);
+			this._currentMark = null;
+
+			delete this._marks[markToDelete.bound];
+			this._recalculateCuts();
+			this._setCursorOrCurrentMark(this._stage.mouseX);
+
+			this._mouseDownStageX = null;
+			return true;
+		}
+
+		this._mouseDownStageX = null;
+		return false;
+	}
+
 	_configureModes() {
 		const CurrentControlMode = () => {
 			switch (this._controlMode) {
@@ -171,6 +311,131 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		this._timelineRect.on('mousedown', (event) => { CurrentControlMode().timelineMouseDown.bind(this)(event); });
 		this._timelineRect.on('click', (event) => { CurrentControlMode().timelineMouseUp.bind(this)(event); });
 		this._stage.on('stagemousemove', (event) => { CurrentControlMode().stageMouseMove.bind(this)(event); });
+	}
+
+	//#region Timeline management
+	_configureStage() {
+		this._stage = new Stage(this.shadowRoot.querySelector('#timeline-canvas'));
+		this._stage.enableMouseOver(30);
+
+		this._timelineRect = new Shape();
+		this._timelineRect.setTransform(constants.TIMELINE_OFFSET_X, constants.TIMELINE_OFFSET_Y);
+		this._timelineRect.graphics.beginFill('#000000').drawRect(0, 0, constants.TIMELINE_WIDTH, constants.TIMELINE_HEIGHT);
+		this._stage.addChild(this._timelineRect);
+
+		this._playedRect = new Shape();
+		this._playedRect.setTransform(10, constants.TIMELINE_OFFSET_Y);
+		this._playedRect.mouseEnabled = false;
+		this._stage.addChild(this._playedRect);
+
+		this._cursorDisplayObj = new Shape();
+		this._cursorDisplayObj.graphics.beginFill('#BCBCBC').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
+		this._cursorDisplayObj.alpha = 0.7;
+		this._cursorDisplayObj.visible = false;
+		this._cursorDisplayObj.mouseEnabled = false;
+		this._stage.addChild(this._cursorDisplayObj);
+
+		this._cursor = {
+			time: 0,
+			displayObject: this._cursorDisplayObj
+		};
+
+		this._contentMarker = new Shape();
+		this._contentMarker.graphics.beginFill('#0099CC').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
+		this._contentMarker.visible = false;
+		this._contentMarker.mouseEnabled = false;
+
+		this._contentMarkerHitBox = new Shape();
+		this._contentMarkerHitBox.graphics.beginFill('#FFF').drawRect(constants.HITBOX_OFFSET, constants.HITBOX_OFFSET, constants.HITBOX_WIDTH, constants.HITBOX_HEIGHT);
+		this._contentMarker.hitArea = this._contentMarkerHitBox;
+
+		this._contentMarker.on('pressmove', (event) => {
+			if (this._isMouseOverTimeline(false)) {
+				this._moveContentMarker(event);
+			} else {
+				this._timeContainer.visible = false;
+				this._stage.update();
+			}
+		});
+		this._stage.addChild(this._contentMarker);
+
+		this._timeContainer = new Container();
+		this._timeContainer.x = 10;
+		this._timeContainer.y = constants.TIME_CONTAINER_OFFSET_Y;
+		this._timeContainer.visible = false;
+		this._stage.addChild(this._timeContainer);
+
+		this._timeTextBorder = new Shape();
+		this._timeTextBorder.graphics.setStrokeStyle(2).beginStroke('#787878').beginFill('white');
+		this._timeTextBorder.graphics.drawRoundRect(0, 0, constants.TIME_TEXT_BORDER_WIDTH, constants.TIME_TEXT_BORDER_HEIGHT, 3);
+		this._timeContainer.addChild(this._timeTextBorder);
+
+		this._timeText = new Text('', '18px Lato', '#616769'); // --d2l-color-ferrite
+		this._timeText.lineHeight = 28;
+		this._timeText.textBaseLine = 'top';
+		this._timeText.x = 10;
+		this._timeText.y = 6;
+		this._timeContainer.addChild(this._timeText);
+
+		this._cutHighlight = new Shape();
+		this._cutHighlight.alpha = 0.3;
+		this._cutHighlight.visible = false;
+		this._cutHighlight.mouseEnabled = false;
+		this._stage.addChild(this._cutHighlight);
+
+		this._stage.update();
+	}
+
+	_cut() {
+		const cut = new Shape();
+		cut.setTransform(this._lowerBound, constants.TIMELINE_OFFSET_Y);
+		cut.graphics.beginFill('#FF0000').drawRect(0, 0, this._upperBound - this._lowerBound, constants.TIMELINE_HEIGHT);
+		cut.alpha = 0.5;
+
+		// When we're splitting a cut by adding a mark, disable mouse for the new cut
+		if (this._controlMode !== constants.CONTROL_MODES.CUT) {
+			cut.mouseEnabled = false;
+		}
+
+		cut.on('click', (event) => {
+			if (this._controlMode === constants.CONTROL_MODES.MARK) {
+				this._addOrDeleteMarkForEvent(event);
+			} else if (this._controlMode === constants.CONTROL_MODES.CUT) {
+				delete this._cuts[event.target.x];
+				this._stage.removeChild(event.target);
+				this._stage.update();
+				this._fireMetadataChangedEvent();
+			}
+		});
+
+		// Add the cut shape below the marks
+		let numMarks = 0;
+		Object.values(this._marks).forEach(() => {
+			numMarks++;
+		});
+
+		const zIndexForCut = this._stage.numChildren - numMarks;
+		this._stage.addChildAt(cut, zIndexForCut);
+		this._stage.update();
+
+		this._cuts[cut.x] = {
+			startTimeMS: (this._lowerMark ? this._lowerMark.time * 1000 : 0),
+			endTimeMS: (this._upperMark ? this._upperMark.time * 1000 : 0),     // NOTE: 0 value means cut goes to end of video.
+			lowerBound: this._lowerBound,
+			upperBound: this._upperBound,
+			displayObject: cut
+		};
+	}
+
+	//#endregion
+	_fireMetadataChangedEvent({ cuts = this._getCuts(), chapters = this.metadata.chapters } = {}) {
+		this.dispatchEvent(new CustomEvent(
+			'metadata-changed',
+			{
+				composed: false,
+				detail: { cuts, chapters }
+			}
+		));
 	}
 
 	_getCutModeHandlers() {
@@ -209,6 +474,13 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 				}
 			}
 		};
+	}
+
+	_getCuts() {
+		return Object.values(this._cuts).map(cut => ({
+			in: cut.startTimeMS / 1000,
+			out: cut.endTimeMS / 1000
+		}));
 	}
 
 	_getMarkModeHandlers() {
@@ -288,6 +560,30 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		};
 	}
 
+	_getNewCutPositionForCut(cut) {
+		let result = cut.lowerBound + 1;
+		// We can use the lowerBound unless the lower mark changed
+		if (cut.lowerBound !== constants.TIMELINE_OFFSET_X && !this._marks[cut.lowerBound + constants.CURSOR_OFFSET_X]) {
+			result = constants.TIMELINE_OFFSET_X + 1;
+			Object.values(this._marks).forEach(mark => {
+				if (mark.bound < cut.upperBound + constants.CURSOR_OFFSET_X && mark.bound > result) {
+					result = mark.bound - constants.CURSOR_OFFSET_X + 1;
+				}
+			});
+		}
+		return result;
+	}
+
+	_getRoundedPosition(stageXPosition) {
+		const time = this._getTimeFromStageX(stageXPosition);
+		const roundedTime = this._getRoundedTime(time);
+		return this._getStageXFromTime(roundedTime);
+	}
+
+	_getRoundedTime(time) {
+		return Math.min(Math.round(time), Math.floor(this._video.duration));
+	}
+
 	_getSeekModeHandlers() {
 		const seek = event => {
 			const clampZeroToOne = number => {
@@ -335,262 +631,6 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 
 		return seekMode;
 	}
-	//#endregion
-
-	//#region Timeline management
-	_configureStage() {
-		this._stage = new Stage(this.shadowRoot.querySelector('#timeline-canvas'));
-		this._stage.enableMouseOver(30);
-
-		this._timelineRect = new Shape();
-		this._timelineRect.setTransform(constants.TIMELINE_OFFSET_X, constants.TIMELINE_OFFSET_Y);
-		this._timelineRect.graphics.beginFill('#000000').drawRect(0, 0, constants.TIMELINE_WIDTH, constants.TIMELINE_HEIGHT);
-		this._stage.addChild(this._timelineRect);
-
-		this._playedRect = new Shape();
-		this._playedRect.setTransform(10, constants.TIMELINE_OFFSET_Y);
-		this._playedRect.mouseEnabled = false;
-		this._stage.addChild(this._playedRect);
-
-		this._cursorDisplayObj = new Shape();
-		this._cursorDisplayObj.graphics.beginFill('#BCBCBC').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
-		this._cursorDisplayObj.alpha = 0.7;
-		this._cursorDisplayObj.visible = false;
-		this._cursorDisplayObj.mouseEnabled = false;
-		this._stage.addChild(this._cursorDisplayObj);
-
-		this._cursor = {
-			time: 0,
-			displayObject: this._cursorDisplayObj
-		};
-
-		this._contentMarker = new Shape();
-		this._contentMarker.graphics.beginFill('#0099CC').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
-		this._contentMarker.visible = false;
-		this._contentMarker.mouseEnabled = false;
-
-		this._contentMarkerHitBox = new Shape();
-		this._contentMarkerHitBox.graphics.beginFill('#FFF').drawRect(constants.HITBOX_OFFSET, constants.HITBOX_OFFSET, constants.HITBOX_WIDTH, constants.HITBOX_HEIGHT);
-		this._contentMarker.hitArea = this._contentMarkerHitBox;
-
-		this._contentMarker.on('pressmove', (event) => {
-			if (this._isMouseOverTimeline(false)) {
-				this._moveContentMarker(event);
-			} else {
-				this._timeContainer.visible = false;
-				this._stage.update();
-			}
-		});
-		this._stage.addChild(this._contentMarker);
-
-		this._timeContainer = new Container();
-		this._timeContainer.x = 10;
-		this._timeContainer.y = constants.TIME_CONTAINER_OFFSET_Y;
-		this._timeContainer.visible = false;
-		this._stage.addChild(this._timeContainer);
-
-		this._timeTextBorder = new Shape();
-		this._timeTextBorder.graphics.setStrokeStyle(2).beginStroke('#787878').beginFill('white');
-		this._timeTextBorder.graphics.drawRoundRect(0, 0, constants.TIME_TEXT_BORDER_WIDTH, constants.TIME_TEXT_BORDER_HEIGHT, 3);
-		this._timeContainer.addChild(this._timeTextBorder);
-
-		this._timeText = new Text('', '18px Lato', '#616769'); // --d2l-color-ferrite
-		this._timeText.lineHeight = 28;
-		this._timeText.textBaseLine = 'top';
-		this._timeText.x = 10;
-		this._timeText.y = 6;
-		this._timeContainer.addChild(this._timeText);
-
-		this._cutHighlight = new Shape();
-		this._cutHighlight.alpha = 0.3;
-		this._cutHighlight.visible = false;
-		this._cutHighlight.mouseEnabled = false;
-		this._stage.addChild(this._cutHighlight);
-
-		this._stage.update();
-	}
-
-	_addCutsToTimeline(cuts) {
-		const clearCuts = () => {
-			Object.values(this._cuts).forEach(cut => {
-				this._stage.removeChild(cut.displayObject);
-			});
-			this._cuts = {};
-		};
-
-		clearCuts();
-
-		const addCut = (cut) => {
-			// Don't add mark if cut starts at 0 seconds
-			if (cut.in > 0) this._addMarkAtTime(cut.in);
-
-			// Don't add mark if cut goes to the end of the video
-			// NOTE: 0 value means cut goes to end of video.
-			if (cut.out > 0 && cut.out <= Math.floor(this._video.duration)) {
-				this._addMarkAtTime(cut.out);
-			}
-
-			this._setCutBoundsForStageX(this._getStageXFromTime(cut.in) + 1); // Trigger a cut just to the right of the lower mark
-			this._cut();
-		};
-
-		cuts.forEach(cut => {
-			addCut(cut);
-		});
-
-		if (this._currentMark) {
-			this._setMarkStyleNormal(this._currentMark.displayObject);
-			this._currentMark = null;
-		}
-
-		this._stage.update();
-	}
-
-	_addMarkAtTime(time) {
-		const markX = this._getStageXFromTime(time) + constants.CURSOR_OFFSET_X;
-		const bound = Math.round(markX);
-
-		// Don't add a mark if one already exists here (e.g. cut from 0-1, cut from 1-2)
-		if (!this._marks[bound]) {
-			const mark = new Shape();
-			mark.setTransform(markX, constants.CURSOR_OFFSET_Y);
-			mark.graphics.beginFill('#797979').drawRect(0, 0, constants.MARK_WIDTH, constants.MARK_HEIGHT);
-
-			const hitBox = new Shape();
-			hitBox.graphics.beginFill('#FFF').drawRect(constants.HITBOX_OFFSET, constants.HITBOX_OFFSET, constants.HITBOX_WIDTH, constants.HITBOX_HEIGHT);
-			mark.hitArea = hitBox;
-			this._stage.addChild(mark);
-
-			this._marks[bound] = {
-				time: time,
-				bound: bound,
-				displayObject: mark
-			};
-		}
-
-		if (this._currentMark) {
-			this._setMarkStyleNormal(this._currentMark.displayObject);
-		}
-
-		this._currentMark = this._marks[bound];
-		return this._currentMark;
-	}
-
-	_addOrDeleteMarkForEvent(event) {
-		if (this._draggingMark) return;
-		if (this._checkForMarkDelete(event)) return;
-		const mark = this._addMarkAtTime(this._cursor.time);
-		const cut = this._isTimeInCut(this._marks[mark.bound].time * 1000);
-		if (cut) {
-			this._stage.removeChild(cut.displayObject);
-			delete this._cuts[cut.x];
-
-			this._setCutBoundsForStageX(cut.displayObject.x + 1);
-			const cuts = this._getCuts();
-			cuts.forEach(c => {
-				// Since the mark will shorten the length of the cut, find the cut with in ===
-				// the lower cut bound, and update its out time
-				if (c.in === (this._lowerMark ? this._lowerMark.time : 0)) {
-					c.out = (this._upperMark ? this._upperMark.time : 0);
-				}
-			});
-			this._fireMetadataChangedEvent({ cuts });
-		}
-
-		this._hideCursor();
-		this._showAndMoveTimeContainer(mark.time);
-		this._stage.update();
-	}
-
-	_checkForMarkDelete(event) {
-		if (this._mouseDownStageX && Math.abs(this._mouseDownStageX - event.stageX) === 0) {
-			const markToDelete = this._marks[Math.round(this._currentMark.displayObject.x)];
-			this._stage.removeChild(markToDelete.displayObject);
-			this._currentMark = null;
-
-			delete this._marks[markToDelete.bound];
-			this._recalculateCuts();
-			this._setCursorOrCurrentMark(this._stage.mouseX);
-
-			this._mouseDownStageX = null;
-			return true;
-		}
-
-		this._mouseDownStageX = null;
-		return false;
-	}
-
-	_cut() {
-		const cut = new Shape();
-		cut.setTransform(this._lowerBound, constants.TIMELINE_OFFSET_Y);
-		cut.graphics.beginFill('#FF0000').drawRect(0, 0, this._upperBound - this._lowerBound, constants.TIMELINE_HEIGHT);
-		cut.alpha = 0.5;
-
-		// When we're splitting a cut by adding a mark, disable mouse for the new cut
-		if (this._controlMode !== constants.CONTROL_MODES.CUT) {
-			cut.mouseEnabled = false;
-		}
-
-		cut.on('click', (event) => {
-			if (this._controlMode === constants.CONTROL_MODES.MARK) {
-				this._addOrDeleteMarkForEvent(event);
-			} else if (this._controlMode === constants.CONTROL_MODES.CUT) {
-				delete this._cuts[event.target.x];
-				this._stage.removeChild(event.target);
-				this._stage.update();
-				this._fireMetadataChangedEvent();
-			}
-		});
-
-		// Add the cut shape below the marks
-		let numMarks = 0;
-		Object.values(this._marks).forEach(() => {
-			numMarks++;
-		});
-
-		const zIndexForCut = this._stage.numChildren - numMarks;
-		this._stage.addChildAt(cut, zIndexForCut);
-		this._stage.update();
-
-		this._cuts[cut.x] = {
-			startTimeMS: (this._lowerMark ? this._lowerMark.time * 1000 : 0),
-			endTimeMS: (this._upperMark ? this._upperMark.time * 1000 : 0),     // NOTE: 0 value means cut goes to end of video.
-			lowerBound: this._lowerBound,
-			upperBound: this._upperBound,
-			displayObject: cut
-		};
-	}
-
-	_getCuts() {
-		return Object.values(this._cuts).map(cut => ({
-			in: cut.startTimeMS / 1000,
-			out: cut.endTimeMS / 1000
-		}));
-	}
-
-	_getNewCutPositionForCut(cut) {
-		let result = cut.lowerBound + 1;
-		// We can use the lowerBound unless the lower mark changed
-		if (cut.lowerBound !== constants.TIMELINE_OFFSET_X && !this._marks[cut.lowerBound + constants.CURSOR_OFFSET_X]) {
-			result = constants.TIMELINE_OFFSET_X + 1;
-			Object.values(this._marks).forEach(mark => {
-				if (mark.bound < cut.upperBound + constants.CURSOR_OFFSET_X && mark.bound > result) {
-					result = mark.bound - constants.CURSOR_OFFSET_X + 1;
-				}
-			});
-		}
-		return result;
-	}
-
-	_getRoundedTime(time) {
-		return Math.min(Math.round(time), Math.floor(this._video.duration));
-	}
-
-	_getRoundedPosition(stageXPosition) {
-		const time = this._getTimeFromStageX(stageXPosition);
-		const roundedTime = this._getRoundedTime(time);
-		return this._getStageXFromTime(roundedTime);
-	}
 
 	_getStageXFromTime(time) {
 		return ((time / this._video.duration) * constants.TIMELINE_WIDTH) + constants.TIMELINE_OFFSET_X;
@@ -620,6 +660,11 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 			this._timeContainer.visible = false;
 		}
 		this._stage.update();
+	}
+
+	//#endregion
+	_handleChaptersChanged(e) {
+		this._fireMetadataChangedEvent({ chapters: e.detail.chapters });
 	}
 
 	_hideCursor() {
@@ -665,11 +710,25 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		return result;
 	}
 
+	get _loading() {
+		return !(
+			this.metadata
+			&& this._videoLoaded
+			&& this.selectedLanguage
+			&& this.selectedLanguage.code
+		);
+	}
+
 	_moveContentMarker(event) {
 		if (this._controlMode === constants.CONTROL_MODES.SEEK) {
 			this._chapters.setChapterToTime(this._getTimeFromStageX(event.stageX));
 			this._showAndMoveTimeContainer(this._activeChapterTime);
 		}
+	}
+
+	//#region Video time management
+	_pauseUpdatingVideoTime() {
+		clearInterval(this._updateTimelineInterval);
 	}
 
 	_recalculateCuts() {
@@ -693,6 +752,11 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 				}
 			}
 		});
+	}
+
+	//#endregion
+	_setChapterToCurrentTime() {
+		this._chapters.setChapterToTime(this._video.currentTime);
 	}
 
 	_setCursorOrCurrentMark(stageXPosition) {
@@ -784,12 +848,6 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 			this._stage.update();
 		}
 	}
-	//#endregion
-
-	//#region Video time management
-	_pauseUpdatingVideoTime() {
-		clearInterval(this._updateTimelineInterval);
-	}
 
 	_startUpdatingVideoTime() {
 		// Restart video if paused at end cut.
@@ -826,64 +884,6 @@ class VideoProducer extends RtlMixin(InternalLocalizeMixin(LitElement)) {
 		const width = Math.min(constants.TIMELINE_WIDTH, constants.TIMELINE_WIDTH * ((this._mouseTime || this._video.currentTime) / this._video.duration));
 		this._playedRect.graphics.clear().beginFill('#0066CC').drawRect(0, 0, width, constants.TIMELINE_HEIGHT);
 		this._stage.update();
-	}
-	//#endregion
-
-	//#region Chapter management
-	_addNewChapter() {
-		this._chapters.addNewChapter(this._video.currentTime);
-	}
-
-	_setChapterToCurrentTime() {
-		this._chapters.setChapterToTime(this._video.currentTime);
-	}
-
-	_handleChaptersChanged(e) {
-		this._fireMetadataChangedEvent({ chapters: e.detail.chapters });
-	}
-	//#endregion
-
-	_fireMetadataChangedEvent({ cuts = this._getCuts(), chapters = this.metadata.chapters } = {}) {
-		this.dispatchEvent(new CustomEvent(
-			'metadata-changed',
-			{
-				composed: false,
-				detail: { cuts, chapters }
-			}
-		));
-	}
-
-	render() {
-		return html`
-			<div class="d2l-video-producer">
-				<div class="d2l-video-producer-video-controls">
-					<d2l-labs-media-player
-						@pause="${this._pauseUpdatingVideoTime}"
-						@play="${this._startUpdatingVideoTime}"
-						@seeking="${this._updateVideoTime}"
-						controls
-						src="${this.src}"
-					></d2l-labs-media-player>
-					<d2l-labs-video-producer-chapters
-						.chapters="${this.metadata && this.metadata.chapters}"
-						.defaultLanguage="${this.defaultLanguage}"
-						.selectedLanguage="${this.selectedLanguage}"
-						?loading="${this._loading}"
-						@add-new-chapter="${this._addNewChapter}"
-						@chapters-changed="${this._handleChaptersChanged}"
-						@set-chapter-to-current-time="${this._setChapterToCurrentTime}"
-					></d2l-labs-video-producer-chapters>
-				</div>
-				<div class="d2l-video-producer-timeline">
-					<canvas width="985" height="90" id="timeline-canvas"></canvas>
-					<div class="d2l-video-producer-timeline-controls">
-						<d2l-button-icon @click="${this._changeToSeekMode}" text="${this.localize(constants.CONTROL_MODES.SEEK)}" icon="tier1:divider-solid"></d2l-button-icon>
-						<d2l-button-icon @click="${this._changeToMarkMode}" text="${this.localize(constants.CONTROL_MODES.MARK)}" icon="tier1:edit"></d2l-button-icon>
-						<d2l-button-icon @click="${this._changeToCutMode}" text="${this.localize(constants.CONTROL_MODES.CUT)}" icon="html-editor:cut"></d2l-button-icon>
-					</div>
-				</div>
-			</div>
-		`;
 	}
 }
 customElements.define('d2l-labs-video-producer', VideoProducer);

@@ -61,75 +61,6 @@ class DemoVideoProducer extends LitElement {
 		this._alertMessage = '';
 	}
 
-	get _loading() {
-		return !(this.metadata && this.languages.length > 0);
-	}
-
-	async fetchAndSetData() {
-		await new Promise(resolve => setTimeout(resolve, 500));
-		this.languages = [{
-			name: 'English (United States)',
-			code: 'en-us',
-			isDefault: true,
-		}, {
-			name: 'Français (Canada)',
-			code: 'fr-fr',
-			isDefault: false
-		}];
-
-		this.selectedLanguage = this.languages.find(language => language.isDefault);
-		this.defaultLanguage = this.selectedLanguage;
-
-		this.metadata = {
-			chapters: [{
-				time: 50,
-				title: {
-					'en-us': 'Chapter 1',
-					'fr-fr': 'Çhàptêr 1',
-				}
-			}, {
-				time: 150,
-				title: {
-					'en-us': 'Chapter 2',
-					'fr-fr': 'Chaptér 2',
-				}
-			}, {
-				time: 500,
-				title: {
-					'en-us': 'Ch 1',
-					'fr-fr': 'Fr Ch 2'
-				}
-			}],
-			cuts: [{ in: 10, out: 60 }, { in: 400, out: 515 }],
-		};
-	}
-	async _handlePublish() {
-		this._publishing = true;
-		console.log('Publishing metadata:', this.metadata);
-		await new Promise(resolve => setTimeout(resolve, 1000));
-		this._publishing = false;
-		this._alertMessage = 'Publish successful.';
-		this.shadowRoot.querySelector('d2l-alert-toast').open = true;
-	}
-	async _handleSave() {
-		this._saving = true;
-		console.log('Saving draft metadata:', this.metadata);
-		await new Promise(resolve => setTimeout(resolve, 1000));
-		this._saving = false;
-
-		this._alertMessage = 'Saved changes.';
-		this.shadowRoot.querySelector('d2l-alert-toast').open = true;
-	}
-
-	_handleMetadataChanged(e) {
-		console.log('Metadata changed:', e.detail);
-		this.metadata = e.detail;
-	}
-
-	_handleSelectedLanguageChanged(e) {
-		this.selectedLanguage = e.detail.selectedLanguage;
-	}
-
 	render() {
 		return html`
 			<div class="demo-video-producer">
@@ -175,6 +106,77 @@ class DemoVideoProducer extends LitElement {
 				</d2l-alert-toast>
 			</div>
 		`;
+	}
+
+	async fetchAndSetData() {
+		await new Promise(resolve => setTimeout(resolve, 500));
+		this.languages = [{
+			name: 'English (United States)',
+			code: 'en-us',
+			isDefault: true,
+		}, {
+			name: 'Français (Canada)',
+			code: 'fr-fr',
+			isDefault: false
+		}];
+
+		this.selectedLanguage = this.languages.find(language => language.isDefault);
+		this.defaultLanguage = this.selectedLanguage;
+
+		this.metadata = {
+			chapters: [{
+				time: 50,
+				title: {
+					'en-us': 'Chapter 1',
+					'fr-fr': 'Çhàptêr 1',
+				}
+			}, {
+				time: 150,
+				title: {
+					'en-us': 'Chapter 2',
+					'fr-fr': 'Chaptér 2',
+				}
+			}, {
+				time: 500,
+				title: {
+					'en-us': 'Ch 1',
+					'fr-fr': 'Fr Ch 2'
+				}
+			}],
+			cuts: [{ in: 10, out: 60 }, { in: 400, out: 515 }],
+		};
+	}
+
+	_handleMetadataChanged(e) {
+		console.log('Metadata changed:', e.detail);
+		this.metadata = e.detail;
+	}
+
+	async _handlePublish() {
+		this._publishing = true;
+		console.log('Publishing metadata:', this.metadata);
+		await new Promise(resolve => setTimeout(resolve, 1000));
+		this._publishing = false;
+		this._alertMessage = 'Publish successful.';
+		this.shadowRoot.querySelector('d2l-alert-toast').open = true;
+	}
+
+	async _handleSave() {
+		this._saving = true;
+		console.log('Saving draft metadata:', this.metadata);
+		await new Promise(resolve => setTimeout(resolve, 1000));
+		this._saving = false;
+
+		this._alertMessage = 'Saved changes.';
+		this.shadowRoot.querySelector('d2l-alert-toast').open = true;
+	}
+
+	_handleSelectedLanguageChanged(e) {
+		this.selectedLanguage = e.detail.selectedLanguage;
+	}
+
+	get _loading() {
+		return !(this.metadata && this.languages.length > 0);
 	}
 }
 

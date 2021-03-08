@@ -91,6 +91,37 @@ class VideoProducerChapters extends InternalLocalizeMixin(LitElement) {
 		this._activeChapterIndex = null;
 	}
 
+	render() {
+		return html`
+			<div class="d2l-video-producer-chapters">
+				<h3 class="d2l-heading-3 d2l-video-producer-chapters-heading">
+					${this.localize('tableOfContents')}
+					<div class="d2l-body-small ${this._editingOverrides ? '' : 'hidden'}">
+						${this.localize('editingOverrides', { language: this.selectedLanguage && this.selectedLanguage.name })}
+					</div>
+				</h3>
+				<div class="d2l-video-producer-chapters-container">
+					${this._renderChapters()}
+				</div>
+				<div class="d2l-video-producer-new-chapter-footer">
+					<d2l-button-icon
+						?disabled="${!this._newChapterTitle}"
+						@click=${this._addNewChapter}
+						class="d2l-video-producer-new-chapter-button"
+						icon="tier1:plus-default"
+						text="${this.localize('addNewChapter')}"
+					></d2l-button-icon>
+					<d2l-input-text
+						@keyup="${this._handleNewChapterInputTextEnter}"
+						@input="${this._handleNewChapterInputTextInput}"
+						class="d2l-video-producer-new-chapter-title-input"
+						placeholder="${this.localize('chapterTitle')}"
+					></d2l-input-text>
+				</div>
+			</div>
+		`;
+	}
+
 	updated(changedProperties) {
 		if (changedProperties.has('chapters') && !this.loading) {
 			if (this.chapters[this._activeChapterIndex]) {
@@ -102,90 +133,6 @@ class VideoProducerChapters extends InternalLocalizeMixin(LitElement) {
 				this._updateActiveChapterIndex(null);
 			}
 		}
-	}
-
-	get _sortedChapters() {
-		return this.chapters.map((chapter, index) => ({
-			...chapter,
-			originalIndex: index // Used to index into this.chapters
-		})).sort((a, b) => parseFloat(a.time) - parseFloat(b.time));
-	}
-
-	get _editingOverrides() {
-		if (!(this.selectedLanguage && this.defaultLanguage)) {
-			return false;
-		}
-		return this.selectedLanguage.code !== this.defaultLanguage.code;
-	}
-
-	_addNewChapter() {
-		this.dispatchEvent(new CustomEvent(
-			'add-new-chapter',
-			{ bubbles: true, composed: false }
-		));
-	}
-
-	_deleteChapter(index) {
-		return () => {
-			this._updateActiveChapterIndex(null);
-			const chapters = [...this.chapters];
-			chapters.splice(index, 1);
-			this._fireChaptersChangedEvent(chapters);
-		};
-	}
-
-	_fireChaptersChangedEvent(chapters) {
-		this.dispatchEvent(new CustomEvent(
-			'chapters-changed',
-			{ bubbles: true, composed: false, detail: { chapters } }
-		));
-	}
-
-	_getTime(time) {
-		return new Date(time * 1000).toISOString().substr(11, 8);
-	}
-
-	_handleNewChapterInputTextInput({ target: { value } }) {
-		this._newChapterTitle = value;
-	}
-
-	_handleNewChapterInputTextEnter({ key }) {
-		if (key === 'Enter') {
-			this._addNewChapter();
-		}
-	}
-
-	_selectChapter(index) {
-		return () => this._updateActiveChapterIndex(index, this.chapters[index].time);
-	}
-
-	_setChapterToCurrentTime(index) {
-		return (event) => {
-			event.target.blur();
-			this._activeChapterIndex = index;
-			this.dispatchEvent(new CustomEvent(
-				'set-chapter-to-current-time',
-				{ bubbles: true, composed: false }
-			));
-		};
-	}
-
-	_updateChapterTitle(index) {
-		return event => {
-			const chapters = [...this.chapters];
-			chapters[index].title[this.selectedLanguage.code] = event.target.value;
-			this._fireChaptersChangedEvent(chapters);
-		};
-	}
-
-	_updateActiveChapterIndex(index, time) {
-		this._activeChapterIndex = index;
-		this.dispatchEvent(new CustomEvent(
-			'active-chapter-updated',
-			{ bubbles: true, composed: false, detail: {
-				chapterTime: index === null ? null : time
-			}}
-		));
 	}
 
 	addNewChapter(chapterTime) {
@@ -232,6 +179,50 @@ class VideoProducerChapters extends InternalLocalizeMixin(LitElement) {
 		this._updateActiveChapterIndex(null);
 	}
 
+	_addNewChapter() {
+		this.dispatchEvent(new CustomEvent(
+			'add-new-chapter',
+			{ bubbles: true, composed: false }
+		));
+	}
+
+	_deleteChapter(index) {
+		return () => {
+			this._updateActiveChapterIndex(null);
+			const chapters = [...this.chapters];
+			chapters.splice(index, 1);
+			this._fireChaptersChangedEvent(chapters);
+		};
+	}
+
+	get _editingOverrides() {
+		if (!(this.selectedLanguage && this.defaultLanguage)) {
+			return false;
+		}
+		return this.selectedLanguage.code !== this.defaultLanguage.code;
+	}
+
+	_fireChaptersChangedEvent(chapters) {
+		this.dispatchEvent(new CustomEvent(
+			'chapters-changed',
+			{ bubbles: true, composed: false, detail: { chapters } }
+		));
+	}
+
+	_getTime(time) {
+		return new Date(time * 1000).toISOString().substr(11, 8);
+	}
+
+	_handleNewChapterInputTextEnter({ key }) {
+		if (key === 'Enter') {
+			this._addNewChapter();
+		}
+	}
+
+	_handleNewChapterInputTextInput({ target: { value } }) {
+		this._newChapterTitle = value;
+	}
+
 	_renderChapters() {
 		if (this.loading) {
 			return html`<d2l-loading-spinner size="150"></d2l-loading-spinner>`;
@@ -276,35 +267,44 @@ class VideoProducerChapters extends InternalLocalizeMixin(LitElement) {
 		});
 	}
 
-	render() {
-		return html`
-			<div class="d2l-video-producer-chapters">
-				<h3 class="d2l-heading-3 d2l-video-producer-chapters-heading">
-					${this.localize('tableOfContents')}
-					<div class="d2l-body-small ${this._editingOverrides ? '' : 'hidden'}">
-						${this.localize('editingOverrides', { language: this.selectedLanguage && this.selectedLanguage.name })}
-					</div>
-				</h3>
-				<div class="d2l-video-producer-chapters-container">
-					${this._renderChapters()}
-				</div>
-				<div class="d2l-video-producer-new-chapter-footer">
-					<d2l-button-icon
-						?disabled="${!this._newChapterTitle}"
-						@click=${this._addNewChapter}
-						class="d2l-video-producer-new-chapter-button"
-						icon="tier1:plus-default"
-						text="${this.localize('addNewChapter')}"
-					></d2l-button-icon>
-					<d2l-input-text
-						@keyup="${this._handleNewChapterInputTextEnter}"
-						@input="${this._handleNewChapterInputTextInput}"
-						class="d2l-video-producer-new-chapter-title-input"
-						placeholder="${this.localize('chapterTitle')}"
-					></d2l-input-text>
-				</div>
-			</div>
-		`;
+	_selectChapter(index) {
+		return () => this._updateActiveChapterIndex(index, this.chapters[index].time);
+	}
+
+	_setChapterToCurrentTime(index) {
+		return (event) => {
+			event.target.blur();
+			this._activeChapterIndex = index;
+			this.dispatchEvent(new CustomEvent(
+				'set-chapter-to-current-time',
+				{ bubbles: true, composed: false }
+			));
+		};
+	}
+
+	get _sortedChapters() {
+		return this.chapters.map((chapter, index) => ({
+			...chapter,
+			originalIndex: index // Used to index into this.chapters
+		})).sort((a, b) => parseFloat(a.time) - parseFloat(b.time));
+	}
+
+	_updateActiveChapterIndex(index, time) {
+		this._activeChapterIndex = index;
+		this.dispatchEvent(new CustomEvent(
+			'active-chapter-updated',
+			{ bubbles: true, composed: false, detail: {
+				chapterTime: index === null ? null : time
+			}}
+		));
+	}
+
+	_updateChapterTitle(index) {
+		return event => {
+			const chapters = [...this.chapters];
+			chapters[index].title[this.selectedLanguage.code] = event.target.value;
+			this._fireChaptersChangedEvent(chapters);
+		};
 	}
 }
 customElements.define('d2l-labs-video-producer-chapters', VideoProducerChapters);
